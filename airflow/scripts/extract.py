@@ -26,21 +26,31 @@ def _ingest_file_to_s3(
     """
     Ingest a file to S3.
     """
+    bucket_name = "payroll-project"
+    region = "ap-southeast-2"
+
     s3_client = boto3.client(
         "s3",
         aws_access_key_id=aws_access_key_id,
         aws_secret_access_key=aws_secret_access_key,
+        region_name=region,
+        endpoint_url="https://s3.ap-southeast-2.amazonaws.com"  # modify end point if changing
     )
-    # Check if the bucket exists, if not create it
-    bucket_name = "payroll-hai"
+
+    # Check if the bucket exists
     existing_buckets = s3_client.list_buckets()["Buckets"]
     if any(bucket["Name"] == bucket_name for bucket in existing_buckets):
         print(f"Bucket {bucket_name} already exists.")
     else:
-        s3_client.create_bucket(Bucket=bucket_name)
+        s3_client.create_bucket(
+            Bucket=bucket_name,
+            CreateBucketConfiguration={"LocationConstraint": region}
+        )
         print(f"Bucket {bucket_name} created.")
-    # Upload the file to raw
+
+    # Upload the file to 'raw/' folder
     key = f"raw/{object_name}"
     s3_client.put_object(Bucket=bucket_name, Key=key, Body=data)
     s3_raw_file_url = f"s3://{bucket_name}/{key}"
     return s3_raw_file_url
+

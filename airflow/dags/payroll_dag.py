@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 
 from scripts.extract import (
     _get_google_drive_file_content,
@@ -37,14 +38,15 @@ SNOWFLAKE_ROLE = os.getenv("SNOWFLAKE_ROLE")
     schedule=None,
     catchup=False,
     tags=["payroll"],
+    template_searchpath="/opt/airflow/sql",
     on_failure_callback=SlackNotifier(
         slack_conn_id="slack",
-        channel="payroll",
+        channel="#payroll",
         text="Payroll DAG failed",
     ),
     on_success_callback=SlackNotifier(
         slack_conn_id="slack",
-        channel="payroll",
+        channel="#payroll",
         text="Payroll DAG succeeded",
     ),
 )
@@ -78,55 +80,75 @@ def payroll_dag():
         s3_processed_file_url = processor._process_file(s3_raw_file_url)
         return s3_processed_file_url
 
-    @task
-    def aggregate_processed_files(**kwargs):
-        ti = kwargs["task_instance"]
-        aggregated_file_list = []
-        i = 0
-        while True:
-            output = ti.xcom_pull(task_ids="process_file", map_indexes=i)
-            if output is None:
-                break
-            aggregated_file_list.append(output)
-            i += 1
-        return aggregated_file_list
+    # @task
+    # def aggregate_processed_files(**kwargs):
+    #     ti = kwargs["task_instance"]
+    #     aggregated_file_list = []
+    #     i = 0
+    #     while True:
+    #         output = ti.xcom_pull(task_ids="process_file", map_indexes=i)
+    #         if output is None:
+    #             break
+    #         aggregated_file_list.append(output)
+    #         i += 1
+    #     return aggregated_file_list
 
-    load_to_snowflake = DockerOperator(
-        task_id="load_to_snowflake",
-        image="spark-app",
-        api_version="auto",
-        auto_remove="force",
-        docker_url="tcp://docker-proxy:2375",
-        network_mode="container:spark-master",
-        tty=True,
-        xcom_all=False,
-        mount_tmp_dir=False,
-        environment={
-            "AWS_ACCESS_KEY_ID": AWS_ACCESS_KEY_ID,
-            "AWS_SECRET_ACCESS_KEY": AWS_SECRET_ACCESS_KEY,
-            "AWS_ENDPOINT": AWS_ENDPOINT,
-            "SNOWFLAKE_ACCOUNT": SNOWFLAKE_ACCOUNT,
-            "SNOWFLAKE_WAREHOUSE": SNOWFLAKE_WAREHOUSE,
-            "SNOWFLAKE_DATABASE": SNOWFLAKE_DATABASE,
-            "SNOWFLAKE_SCHEMA": SNOWFLAKE_SCHEMA,
-            "SNOWFLAKE_USER": SNOWFLAKE_USER,
-            "SNOWFLAKE_PASSWORD": SNOWFLAKE_PASSWORD,
-            "SNOWFLAKE_ROLE": SNOWFLAKE_ROLE,
-            "S3_URI_LIST": "{{ task_instance.xcom_pull(task_ids='aggregate_processed_files') }}",
-        },
-    )
+    # CASE1: USING SPARK
+    # load_to_snowflake = DockerOperator(
+    #     task_id="load_to_snowflake",
+    #     image="spark-app",
+    #     api_version="auto",
+    #     auto_remove="force",
+    #     docker_url="tcp://docker-proxy:2375",
+    #     network_mode="container:spark-master",
+    #     tty=True,
+    #     xcom_all=False,
+    #     mount_tmp_dir=False,
+    #     environment={
+    #         "AWS_ACCESS_KEY_ID": AWS_ACCESS_KEY_ID,
+    #         "AWS_SECRET_ACCESS_KEY": AWS_SECRET_ACCESS_KEY,
+    #         "AWS_ENDPOINT": AWS_ENDPOINT,
+    #         "SNOWFLAKE_ACCOUNT": SNOWFLAKE_ACCOUNT,
+    #         "SNOWFLAKE_WAREHOUSE": SNOWFLAKE_WAREHOUSE,
+    #         "SNOWFLAKE_DATABASE": SNOWFLAKE_DATABASE,
+    #         "SNOWFLAKE_SCHEMA": SNOWFLAKE_SCHEMA,
+    #         "SNOWFLAKE_USER": SNOWFLAKE_USER,
+    #         "SNOWFLAKE_PASSWORD": SNOWFLAKE_PASSWORD,
+    #         "SNOWFLAKE_ROLE": SNOWFLAKE_ROLE,
+    #         "S3_URI_LIST": "{{ task_instance.xcom_pull(task_ids='aggregate_processed_files') }}",
+    #     },
+    # )
 
     gd_file_list = get_google_drive_file_list()
     ingested_file_list = ingest_file.expand(gd_file=gd_file_list)
     processed_file_list = process_file.expand(s3_raw_file_url=ingested_file_list)
-    aggregated_file_list = aggregate_processed_files()
+    #aggregated_file_list = aggregate_processed_files()
 
+    #CASE2: USING EXTERNAL INTEGRATION LOAD FROM S3 TO SNOWFLAKE
+    create_tables = SQLExecuteQueryOperator(
+        task_id="create_tables",
+        sql="create_tables.sql",
+        conn_id="snowflake",
+    )
+
+    load_to_dw = SQLExecuteQueryOperator.partial(
+        task_id="load_to_dw",
+        sql="load_to_dw.sql",
+        conn_id="snowflake",
+    ).expand(params=processed_file_list.map(lambda path: {"processed_file_path": path}))
+    
     (
+        #gd_file_list
+        #>>ingested_file_list
+        #>>processed_file_list
+        #>>aggregated_file_list
+        #>>load_to_snowflake
+
         gd_file_list
-        >> ingested_file_list
-        >> processed_file_list
-        >> aggregated_file_list
-        >> load_to_snowflake
+        >>ingested_file_list
+        >>processed_file_list
+        >>create_tables
+        >>load_to_dw
     )
 
 
