@@ -13,3 +13,6 @@ wheels/
 *.log
 PAYROLL_DATA/
 *.jar
+.env
+.DS_Store
+.DS_Store
