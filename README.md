@@ -1,7 +1,5 @@
 
-# payroll_project
-=======
-# Payroll Data Pipeline
+# Payroll Data Pipeline (Using EXTERNAL_STAGE type to create STORAGE INTEGRATION instead of Spark)
 
 This project demonstrates a modern data pipeline for automating the extraction, transformation, and loading (ETL) of payroll and HR data. The pipeline centralizes payroll data, enabling efficient processing, compliance, and analytics to support HR and finance operations.
 
@@ -76,7 +74,7 @@ The payroll datasets include employee records, salary details, attendance logs, 
 
 ### Clone the repository
 ```shell
-git clone https://github.com/cdoge25/payroll-project.git
+git clone https://github.com/...
 ```
 
 ### Setup virtual environment
